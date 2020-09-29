@@ -274,6 +274,7 @@ class RCE():
         Returns:
             bool: ``True`` if converged, else ``False``.
         """
+<<<<<<< HEAD
         
         # Calculates the change in the energy flux imbalance at the TOA
         self.newDN = self.radiation["toa"][-1] - self.oldN
@@ -441,6 +442,7 @@ class RCE():
             self.deltaT = self.atmosphere['T'][0].copy() - self.oldT
             
             # Adjusts the time step
+
             if self.timestep_adjuster is not None:
                 self.timestep = self.timestep_adjuster(
                     self.timestep, self.deltaT * self.timestep_days
