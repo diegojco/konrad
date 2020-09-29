@@ -448,6 +448,7 @@ class RCE:
             self.deltaT = self.atmosphere["T"][0].copy() - self.oldT
 
             # Adjusts the time step
+
             if self.timestep_adjuster is not None:
                 self.timestep = self.timestep_adjuster(
                     self.timestep, self.deltaT * self.timestep_days
