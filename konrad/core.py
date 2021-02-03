@@ -59,7 +59,6 @@ class RCE:
         co2_adjustment_timescale=np.nan,
         logevery=None,
         timestep_adjuster=None,
-        post_count=365,
     ):
         """Set-up a radiative-convective model.
 
