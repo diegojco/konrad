@@ -81,6 +81,7 @@ class ZeroBuoyancyEtrainingPlume(Entrainment):
         RH = np.where(RH > 1, 1, RH)
         RH_hlev = interp1d(np.log(p), RH, fill_value="extrapolate")(np.log(phlev[:-1]))
 
+        entr = self.entr
         deltaT = np.ones_like(p) * 0.0
         k_cb = np.max(np.where(p >= 96000.0))
         deltaT[k_cb:] = (
