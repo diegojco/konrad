@@ -307,11 +307,9 @@ class RCE:
             d_txt = "Days within equilibrium conditions: {0:3.2f}"
             logger.debug(d_txt.format(self.counteq.total_seconds() / (60 * 60 * 24)))
             d_txt = "Delta N (TOA): {0:2.2e} (Threshold: {1:2.2e})"
-            logger.debug(d_txt.format(self.newDN / self.timestep_days, self.delta))
+            logger.info(d_txt.format(self.newDN / self.timestep_days, self.delta))
             d_txt = "Delta (Delta N (TOA)): {0:2.2e} (Threshold: {1:2.2e})"
-            logger.debug(
-                d_txt.format(self.newDDN / self.timestep_days ** 2, self.delta2)
-            )
+            logger.info(d_txt.format(self.newDDN / self.timestep_days**2, self.delta2))
 
         # If the equilibrium is larger than the threshold count, it declares
         #     convergence
@@ -526,3 +524,4 @@ class TimestepAdjuster:
             timestep = self.timestep_min
 
         return timestep
+
