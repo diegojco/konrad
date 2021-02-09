@@ -342,6 +342,93 @@ class Cariolle(Ozone):
             (o3 + (do3dt * 24 * 60 ** 2 + transport_ox) * timestep).reshape(1, -1),
         )
 
+class Cariolle_normalised(Cariolle):
+    """Implementation of the Cariolle scheme with redistribution of the coefficients
+    wrt the cold-point or thermal-tropopause pressure.
+    """
+    def __init__(self, w=0, norm_level=None,
+                 is_coupled_upwelling=False, profile_coupling="cold_point"):
+        """
+        Parameters:
+            w (ndarray / int / float): upwelling velocity [mm / s]
+            is_coupled_upwelling (bool): whether to couple to upwelling model
+            profile_coupling (str): Mechanism to determine the normalisation level:
+                    * "cold_point": Coupled to the cold-point tropopause
+                    * "thermal_tropopause": Coupled to the WMO thermal tropopause
+        """
+        super().__init__(w=w, is_coupled_upwelling=is_coupled_upwelling)
+        self.norm_level = norm_level
+        self._new_norm_level = None
+        self._a = None
+        self._profile_coupling = profile_coupling
+    
+    def get_norm_level(self, atmosphere):
+        if self._profile_coupling == 'cold_point':
+            return atmosphere.get_cold_point_plev(interpolate=True)
+        elif self._profile_coupling == 'thermal_tropopause':
+            return atmosphere.get_thermal_tropopause_plev()
+        else:
+            raise ValueError("Invalid coupling mechanism.")
+
+    def get_param_interpolations(self, atmosphere):
+        cariolle_data = Dataset(
+            os.path.join(os.path.dirname(__file__),
+                         'data/Cariolle_data.nc'))
+        p_data = cariolle_data['p'][:]
+        alist = []
+        for param_num in range(1, 8):
+            a = cariolle_data[f'A{param_num}'][:]
+            alist.append(interp1d(p_data / self.norm_level, a, bounds_error = False,
+                                  fill_value=(a[0],a[-1]))
+            )
+        return alist
+    
+    def get_params(self,p):
+        alist = []
+        for param_num in range(1, 8):
+            alist.append(self._a[param_num - 1](p / self._new_norm_level))
+        return alist
+
+    def __call__(self, atmosphere, timestep, upwelling, **kwargs):
+        
+        try:
+            from simotrostra.utils import overhead_molecules
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError(
+                "No module named 'simotrostra'. You need to install it in order"
+                " to use this ozone class.\n"
+                "It can be found here:\n"
+                "https://gitlab.com/simple-stratospheric-chemistry/simotrostra"
+            )
+        
+        if self.norm_level is None:
+            self.norm_level = self.get_norm_level(atmosphere)
+
+        if self._a is None:
+            self._a = self.get_param_interpolations(atmosphere)
+        
+        self._new_norm_level = self.get_norm_level(atmosphere) 
+
+        T = atmosphere['T'][0, :]
+        p = atmosphere['plev']  # [Pa]
+        o3 = atmosphere['O3'][0, :]  # moles of ozone / moles of air
+        z = atmosphere['z'][0, :]  # m
+
+        o3col = overhead_molecules(o3, p, z, T
+                                   ) * 10 ** -4  # in molecules / cm2
+
+        A1, A2, A3, A4, A5, A6, A7 = self.get_params(p)
+        # A7 is in molecules / cm2
+        # tendency of ozone volume mixing ratio per second
+        do3dt = A1 + A2*(o3 - A3) + A4*(T - A5) + A6*(o3col - A7)
+
+        # transport term
+        transport_ox = self.ozone_transport(o3, z, upwelling)
+
+        atmosphere['O3'] = (
+            ('time', 'plev'),
+            (o3 + (do3dt * 24 * 60**2 + transport_ox) * timestep).reshape(1, -1)
+        )
 
 class Simotrostra(Cariolle):
     """Wrapper for Ed Charlesworth's simple chemistry scheme."""

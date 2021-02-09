@@ -283,7 +283,7 @@ class RCE:
         self.newDDN = np.abs(self.newDN) - np.abs(self.oldDN)
 
         # Checks whether the difference is below the threshold
-        test1 = (np.abs(self.newDN) / self.timestep_days) <= self.delta
+        test1 = np.abs(self.newDN) <= self.delta
         # Checks whether the second order difference is below the threshold
         test2 = (np.abs(self.newDDN) / self.timestep_days ** 2) <= self.delta2
 
@@ -307,9 +307,9 @@ class RCE:
             d_txt = "Days within equilibrium conditions: {0:3.2f}"
             logger.debug(d_txt.format(self.counteq.total_seconds() / (60 * 60 * 24)))
             d_txt = "Delta N (TOA): {0:2.2e} (Threshold: {1:2.2e})"
-            logger.info(d_txt.format(self.newDN / self.timestep_days, self.delta))
+            logger.info(d_txt.format(self.newDN, self.delta))
             d_txt = "Delta (Delta N (TOA)): {0:2.2e} (Threshold: {1:2.2e})"
-            logger.info(d_txt.format(self.newDDN / self.timestep_days**2, self.delta2))
+            logger.info(d_txt.format(self.newDDN, self.delta2))
 
         # If the equilibrium is larger than the threshold count, it declares
         #     convergence
