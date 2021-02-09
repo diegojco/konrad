@@ -364,6 +364,48 @@ class Atmosphere(Component):
             # Return the single coldest point on the actual pressure grid.
             return self['plev'][self.get_cold_point_index()]
 
+    def get_thermal_tropopause_index(self):
+        """Return the model level index of the thermal tropopause.
+        
+        Returns:
+            int: Model level index at the thermal tropopause as defined by the WMO.
+        """
+        # Calculates the lapse-rate in Kelvin per kilometre
+        lapse_rate = np.gradient(self["T"][0, :], self["z"][0, :] / 1000)
+        
+        # Gets the indices where the lapse rate decreases at less than two Kelvin per
+        # kilometre
+        mask = np.where(lapse_rate_K_per_km > -2)[0]
+        
+        # 1. Takes lowermost index in our mask
+        # 2. Gets all the points that are two kilometres above this index
+        # 3. If the lapse rate decreases at less than two Kelvin per kilometre in this
+        #    region, then this is the tropopause level
+        # 4. Otherwise select the next candidate index
+        thermal_tropopause = False
+        i=0
+        while not thermal_tropopause:
+            
+            index = mask[i]
+            
+            limit_test = np.where(self["z"][0, :]-self["z"][0, index] >= 2)[0][0]
+            region = lapse_rate_K_per_km[index:limit_test + 1]
+            
+            if np.all(region >= -2):
+                thermal_tropopause = index
+            i += 1
+            
+        return thermal_tropopause
+
+    def get_thermal_tropopause_plev(self):
+        """Return the thermal tropopause pressure.
+
+        Returns:
+            float: Pressure at the thermal tropopause [Pa].
+        """
+        
+        return self['plev'][self.get_thermal_tropopause_index()]
+
     def get_triple_point_index(self):
         """Return the model level index at the triple point.
 
