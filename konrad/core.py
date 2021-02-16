@@ -2,7 +2,6 @@
 import datetime
 import logging
 
-import copy
 import numpy as np
 
 from konrad import constants
@@ -59,7 +58,6 @@ class RCE():
         co2_adjustment_timescale=np.nan,
         logevery=None,
         timestep_adjuster=None,
-        post_count=365,
     ):
         """Set-up a radiative-convective model.
 
