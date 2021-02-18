@@ -388,7 +388,7 @@ class Atmosphere(Component):
         
         # Gets the indices where the lapse rate decreases at less than two Kelvin per
         # kilometre
-        mask = np.where(lapse_rate_K_per_km > -2)[0]
+        mask = np.where(lapse_rate > -2)[0]
         
         # 1. Takes lowermost index in our mask
         # 2. Gets all the points that are two kilometres above this index
@@ -402,7 +402,7 @@ class Atmosphere(Component):
             index = mask[i]
             
             limit_test = np.where(self["z"][0, :]-self["z"][0, index] >= 2)[0][0]
-            region = lapse_rate_K_per_km[index:limit_test + 1]
+            region = lapse_rate[index:limit_test + 1]
             
             if np.all(region >= -2):
                 thermal_tropopause = index
