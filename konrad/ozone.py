@@ -42,6 +42,8 @@ import numbers
 from netCDF4 import Dataset
 from scipy.interpolate import interp1d
 from konrad.component import Component
+from konrad.constants import earth_standard_gravity as g
+from typhon.physics import density
 
 __all__ = [
     'Ozone',
@@ -334,7 +336,6 @@ class Cariolle_normalised(Cariolle):
         """
         super().__init__(w=w, is_coupled_upwelling=is_coupled_upwelling)
         self.norm_level = norm_level
-        self._new_norm_level = None
         self._a = None
         self._profile_coupling = profile_coupling
     
@@ -351,10 +352,36 @@ class Cariolle_normalised(Cariolle):
             os.path.join(os.path.dirname(__file__),
                          'data/Cariolle_data.nc'))
         p_data = cariolle_data['p'][:]
+        T_data = cariolle_data['A5'][:]
+        
+        # Calculate normalisation level from the Cariolle data
+        if self._profile_coupling == "cold_point":
+            cp_idx = np.where(T_data == np.min(T_data[p_data > 1000]))[0][0]
+            p_data /= p_data[cp_idx]
+        elif self._profile_coupling == "thermal_tropopause":
+            z_data = np.cumsum(-np.gradient(np.flip(p_data)) /
+                 (density(np.flip(p_data), np.flip(Tp_data)) * g)
+            )
+            lapse_rate_km = np.gradient(T_data, z_data / 1000)
+            mask = np.where(lapse_rate_km > -2)[0]
+            tt_idx = False
+            i=0
+            while not tt_idx:
+                index = mask[i]
+                limit_test = np.where(z_data - z_data[index] >= 2)[0][0]
+                region = lapse_rate_km[index:limit_test + 1]
+                if np.all(region >= -2):
+                    tt_idx = index
+                i += 1
+            p_data /= p_data[tt_idx]
+        else:
+            raise ValueError("Invalid coupling mechanism.")
+        
+        # Normalise the Cariolle pressure profile and create the interpolators
         alist = []
         for param_num in range(1, 8):
             a = cariolle_data[f'A{param_num}'][:]
-            alist.append(interp1d(p_data / self.norm_level, a, bounds_error = False,
+            alist.append(interp1d(p_data, a, bounds_error = False,
                                   fill_value=(a[0],a[-1]))
             )
         return alist
@@ -362,7 +389,7 @@ class Cariolle_normalised(Cariolle):
     def get_params(self,p):
         alist = []
         for param_num in range(1, 8):
-            alist.append(self._a[param_num - 1](p / self._new_norm_level))
+            alist.append(self._a[param_num - 1](p / self.norm_level))
         return alist
 
     def __call__(self, atmosphere, timestep, upwelling, **kwargs):
@@ -376,14 +403,11 @@ class Cariolle_normalised(Cariolle):
                 "It can be found here:\n"
                 "https://gitlab.com/simple-stratospheric-chemistry/simotrostra"
             )
-        
-        if self.norm_level is None:
-            self.norm_level = self.get_norm_level(atmosphere)
 
         if self._a is None:
             self._a = self.get_param_interpolations(atmosphere)
         
-        self._new_norm_level = self.get_norm_level(atmosphere) 
+        self.norm_level = self.get_norm_level(atmosphere) 
 
         T = atmosphere['T'][0, :]
         p = atmosphere['plev']  # [Pa]

@@ -257,10 +257,17 @@ class HardAdjustment(Convection):
             else:
                 diff_neg = diff
                 surfaceTneg = surfaceT
+                
+            if  np.abs(surfaceTpos - surfaceTneg) < 1e-7:
+                #print("counter=",counter)
+                #print("diff_pos=",diff_pos)
+                #print("diff_neg=",diff_neg)
+
+                return T_con, surfaceT
 
             # to avoid getting stuck in a loop if something weird is going on
             counter += 1
-            if counter == 100:
+            if counter == 3000:
                 raise ValueError(
                     "No energy conserving convective profile can be found"
                 )
@@ -410,6 +417,34 @@ class HardAdjustment(Convection):
         self.create_variable('convective_top_height', np.array([contop_z]))
         return
 
+class HardAdjustment_Overshoot(HardAdjustment):
+
+    def convective_profile(self, atmosphere, surfaceT, lapse, **kwargs):
+        # The convective adjustment is only applied to the atmospheric profile,
+        # if it causes heating somewhere
+        T_rad = atmosphere["T"][-1]
+        T_con = self.get_moist_adiabat(atmosphere, surfaceT, lapse)
+
+        # Entrain dry air into the convective atmosphere column.
+        T_con = self._entrainment.entrain(T_con, atmosphere)
+
+        T_con_overshoot = T_con
+        # Define overshoot weight T_rad and T_con between Zcontop and Zcontop+10km
+        # Weight for T_con: 1/2^((Z-Zcontop)/1000+7)
+        # Weight for T_rad: 1-1/2^((Z-Zcontop)/1000+7)
+
+        z = atmosphere['z'][0,:]/1000.
+
+        # Combine radiative and convective temperature profiles.
+        if np.any(T_con > T_rad):
+            contop = np.max(np.where(T_con > T_rad))
+            z_contop = (z[contop]+z[contop+1])/2.
+            weight_con = 1./2**(z[contop+1:]-z_contop+7)
+            T_con_overshoot[contop+1:] = (weight_con)*T_con[contop+1:] + (1-weight_con)*T_rad[contop+1:]
+        else:
+            return T_rad
+
+        return T_con_overshoot
 
 class RelaxedAdjustment(HardAdjustment):
     """Adjustment with relaxed convection in upper atmosphere.
