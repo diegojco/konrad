@@ -310,7 +310,7 @@ class RCE:
             logger.info(d_txt.format(self.newDN, self.delta))
             d_txt = "Delta (Delta N (TOA)): {0:2.2e} (Threshold: {1:2.2e})"
             logger.info(d_txt.format(self.newDDN, self.delta2))
-
+            logger.info(f'Upwelling speed: {self.upwelling._w}')
         # If the equilibrium is larger than the threshold count, it declares
         #     convergence
         return self.counteq > self.post_count
@@ -405,6 +405,7 @@ class RCE:
 
             # Applies cooling due to stratospheric upwelling
             self.upwelling.cool(
+                surface=self.surface,
                 atmosphere=self.atmosphere,
                 convection=self.convection,
                 timestep=self.timestep_days,
