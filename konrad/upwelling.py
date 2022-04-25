@@ -82,7 +82,6 @@ class Upwelling(Component, metaclass=abc.ABCMeta):
     def cool(self, surface, atmosphere, convection, timestep):
         """ Cool the atmosphere according to an upwelling.
         Parameters:
-            surface (konrad.surface.Surface): Surface model.
             atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
             convection (konrad.convection): Convection model.
             timestep (float): Timestep width [day].
@@ -115,7 +114,6 @@ class StratosphericUpwelling(Upwelling):
         radiative heating becomes small).
 
         Parameters:
-            surface (konrad.surface.Surface): Surface model.
             atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
             convection (konrad.convection): Convection model.
             timestep (float): Timestep width [day].
@@ -149,13 +147,21 @@ class StratosphericUpwelling(Upwelling):
         self["cooling_rates"] = (("time", "plev"), -Q.reshape(1, -1))
 
 class Coupled_StratosphericUpwelling(Upwelling):
-    """Include an evolving upwelling in a logistic fashion"""
-    def __init__(self, w=0.2, lowest_level=None, w_max=0.25, rate=1):
+    """Linear relationship between surface warming and upwelling speed"""
+    def __init__(self, w=0.2, rate=0.03, lowest_level=None):
+        """ Creates a coupled upwelling handler.
+            
+        Parameters:
+             w (float): Upwelling velocity in mm/s.
+             rate(float): Rate at which the w changes with surface temperature. mm/s/K
+             lowest_level (int or None): The index of the lowest level to which
+                 the upwelling is applied. If none, uses the top of convection.
+                
+        """
         self._w = w * meters_per_day
-        self._lowest_level = lowest_level
         self._w_o = w
-        self._w_f = w_max
         self._rate = rate
+        self._lowest_level = lowest_level
         self._Tso = None
         
     def _update_upwelling(self, surface):
@@ -166,23 +172,11 @@ class Coupled_StratosphericUpwelling(Upwelling):
         
         Notes:
             
-            This updating model considers the relationship between warmer surface tem-
-            perature and increasing stratospheric upwelling speed. The model links
-            warming and upwelling speed through a logistic model, where there is an
-            initial pre-industrial upwelling and a final forcing-dependent upwelling.
-            The rate at which the upwelling increases is prescribed.
-            
-            I use the solutions of the equation
-            
-            .. math:: \\frac{d\, w}{d(\Delta T)} = r w \\left(1-\\frac{w}{w_{f}}\\right)
-            
-            with the constraint :math:w(0)=w_{o} and :math:r is the rate of growth.
+            This updating model assumes a linear relationships between warming and
+            upwelling.
+
         """
-        new_w = np.exp(- self._rate * (surface["temperature"][-1] - self._Tso))
-        new_w *= ((self._w_f / self._w_o) - 1)
-        new_w += 1
-        new_w = 1 / new_w
-        new_w *= self._w_f
+        new_w = self._w_o + (self._rate * (surface["temperature"][-1] - self._Tso))
         return new_w
     
     def cool(self, surface, atmosphere, convection, timestep):
@@ -205,19 +199,19 @@ class Coupled_StratosphericUpwelling(Upwelling):
         # Ensure that the variable is initialized even if the upwelling is not
         # applied. A proper initaliziation is needed to write netCDF output.
         self.create_variable(
-            'cooling_rates',
-            dims=('time', 'plev'),
+            "cooling_rates",
+            dims=("time", "plev"),
             data=np.zeros_like(atmosphere["plev"]).reshape(1, -1),
         )
         
-        T = atmosphere['T'][0, :]
-        z = atmosphere['z'][0, :]
+        T = atmosphere["T"][0, :]
+        z = atmosphere["z"][0, :]
         Cp = atmosphere.get_heat_capacity()
         
         if self._lowest_level is not None:
             above_level_index = self._lowest_level
         else:
-            above_level_index = convection.get('convective_top_index')[0]
+            above_level_index = convection.get("convective_top_index")[0]
             if np.isnan(above_level_index):
                 # if convection hasn't been applied and a lowest level for the
                 # upwelling has not been specified, upwelling is not applied
@@ -226,10 +220,9 @@ class Coupled_StratosphericUpwelling(Upwelling):
         
         Q = cooling_rates(T, z, self._w, Cp, above_level_index)
         
-        atmosphere['T'][0, :] += Q * timestep
+        atmosphere["T"][0, :] += Q * timestep
         
-        self['cooling_rates'] = (('time', 'plev'), -Q.reshape(1, -1))
-        
+        self["cooling_rates"] = (("time", "plev"), -Q.reshape(1, -1))
 
 class SpecifiedCooling(Upwelling):
     """Include an upwelling with specified cooling"""

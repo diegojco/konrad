@@ -263,7 +263,7 @@ class HardAdjustment(Convection):
             else:
                 diff_neg = diff
                 surfaceTneg = surfaceT
-                
+
             if  np.abs(surfaceTpos - surfaceTneg) < 1e-7:
                 #print("counter=",counter)
                 #print("diff_pos=",diff_pos)
@@ -273,15 +273,8 @@ class HardAdjustment(Convection):
 
             # to avoid getting stuck in a loop if something weird is going on
             counter += 1
-<<<<<<< HEAD
-            if counter == 100:
+            if counter == 10000:
                 raise ValueError("No energy conserving convective profile can be found")
-=======
-            if counter == 3000:
-                raise ValueError(
-                    "No energy conserving convective profile can be found"
-                )
->>>>>>> b978d81 (Adding the changes used during the upwelling change project.)
 
         return T_con, surfaceT
 
@@ -435,14 +428,9 @@ class HardAdjustment(Convection):
         self.create_variable("convective_top_height", np.array([contop_z]))
         return
 
-class HardAdjustment_Overshoot(HardAdjustment):
 
-    def convective_profile(self, atmosphere, surfaceT, lapse, **kwargs):
-        # The convective adjustment is only applied to the atmospheric profile,
-        # if it causes heating somewhere
-        T_rad = atmosphere["T"][-1]
-        T_con = self.get_moist_adiabat(atmosphere, surfaceT, lapse)
-
+class FixedDynamicalHeating(HardAdjustment):
+    """Adjustment with a fixed convective (dynamical) heating rate."""
         # Entrain dry air into the convective atmosphere column.
         T_con = self._entrainment.entrain(T_con, atmosphere)
 
@@ -463,9 +451,6 @@ class HardAdjustment_Overshoot(HardAdjustment):
             return T_rad
 
         return T_con_overshoot
-
-class FixedDynamicalHeating(HardAdjustment):
-    """Adjustment with a fixed convective (dynamical) heating rate."""
 
     def __init__(self, heating=None, *args, **kwargs):
         """

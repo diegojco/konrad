@@ -43,8 +43,6 @@ from scipy.interpolate import interp1d
 
 from konrad import constants
 from konrad.component import Component
-from konrad.constants import earth_standard_gravity as g
-from typhon.physics import density
 
 __all__ = [
     "Ozone",
@@ -352,107 +350,51 @@ class Cariolle_normalised(Cariolle):
                  is_coupled_upwelling=False, profile_coupling="cold_point"):
         """
         Parameters:
-            w (ndarray / int / float): upwelling velocity [mm / s]
-            is_coupled_upwelling (bool): whether to couple to upwelling model
-            profile_coupling (str): Mechanism to determine the normalisation level:
-                    * "cold_point": Coupled to the cold-point tropopause
-                    * "thermal_tropopause": Coupled to the WMO thermal tropopause
+            p (ndarray): pressure levels [Pa]
+            T (ndarray): temperature values [K]
+        Returns:
+            ndarray: density of molecules [number of molecules / m3]
         """
-        super().__init__(w=w, is_coupled_upwelling=is_coupled_upwelling)
-        self.norm_level = norm_level
-        self._a = None
-        self._profile_coupling = profile_coupling
-    
-    def get_norm_level(self, atmosphere):
-        if self._profile_coupling == 'cold_point':
-            return atmosphere.get_cold_point_plev(interpolate=True)
-        elif self._profile_coupling == 'thermal_tropopause':
-            return atmosphere.get_thermal_tropopause_plev()
-        else:
-            raise ValueError("Invalid coupling mechanism.")
+        return (constants.avogadro * p) / (constants.molar_gas_constant_dry_air * T)
 
-    def get_param_interpolations(self, atmosphere):
-        cariolle_data = Dataset(
-            os.path.join(os.path.dirname(__file__),
-                         'data/Cariolle_data.nc'))
-        p_data = cariolle_data['p'][:]
-        T_data = cariolle_data['A5'][:]
-        
-        # Calculate normalisation level from the Cariolle data
-        if self._profile_coupling == "cold_point":
-            cp_idx = np.where(T_data == np.min(T_data[p_data > 1000]))[0][0]
-            p_data /= p_data[cp_idx]
-        elif self._profile_coupling == "thermal_tropopause":
-            z_data = np.cumsum(-np.gradient(np.flip(p_data)) /
-                 (density(np.flip(p_data), np.flip(Tp_data)) * g)
-            )
-            lapse_rate_km = np.gradient(T_data, z_data / 1000)
-            mask = np.where(lapse_rate_km > -2)[0]
-            tt_idx = False
-            i=0
-            while not tt_idx:
-                index = mask[i]
-                limit_test = np.where(z_data - z_data[index] >= 2)[0][0]
-                region = lapse_rate_km[index:limit_test + 1]
-                if np.all(region >= -2):
-                    tt_idx = index
-                i += 1
-            p_data /= p_data[tt_idx]
-        else:
-            raise ValueError("Invalid coupling mechanism.")
-        
-        # Normalise the Cariolle pressure profile and create the interpolators
-        alist = []
-        for param_num in range(1, 8):
-            a = cariolle_data[f'A{param_num}'][:]
-            alist.append(interp1d(p_data, a, bounds_error = False,
-                                  fill_value=(a[0],a[-1]))
-            )
-        return alist
-    
-    def get_params(self,p):
-        alist = []
-        for param_num in range(1, 8):
-            alist.append(self._a[param_num - 1](p / self.norm_level))
-        return alist
+    def overhead_molecules(self, gas, p, z, T):
+        """
+        Parameters:
+            gas (ndarray): gas concentration [ppv] corresponding to levels p
+            p (ndarray): pressure levels [Pa]
+            z (ndarray): height values [m]
+            T (ndarray): temperature values [K]
+        Returns:
+            ndarray: number of molecules per m2 in overhead column
+        """
+        # molecules / m2 of air in each layer
+        molecules_air = self.density_of_molecules(p, T) * np.gradient(z)
+        # overhead column in molecules / m2
+        col = np.flipud(np.cumsum(np.flipud(gas * molecules_air)))
+
+        return col
 
     def __call__(self, atmosphere, timestep, upwelling, **kwargs):
-        
-        try:
-            from simotrostra.utils import overhead_molecules
-        except ModuleNotFoundError:
-            raise ModuleNotFoundError(
-                "No module named 'simotrostra'. You need to install it in order"
-                " to use this ozone class.\n"
-                "It can be found here:\n"
-                "https://gitlab.com/simple-stratospheric-chemistry/simotrostra"
-            )
+        T = atmosphere["T"][0, :]
+        p = atmosphere["plev"]  # [Pa]
+        o3 = atmosphere["O3"][0, :]  # moles of ozone / moles of air
+        z = atmosphere["z"][0, :]  # m
 
-        if self._a is None:
-            self._a = self.get_param_interpolations(atmosphere)
-        
-        self.norm_level = self.get_norm_level(atmosphere) 
-
-        T = atmosphere['T'][0, :]
-        p = atmosphere['plev']  # [Pa]
-        o3 = atmosphere['O3'][0, :]  # moles of ozone / moles of air
-        z = atmosphere['z'][0, :]  # m
-
-        o3col = overhead_molecules(o3, p, z, T
-                                   ) * 10 ** -4  # in molecules / cm2
+        o3col = self.overhead_molecules(o3, p, z, T) * 10 ** -4  # in molecules / cm2
 
         A1, A2, A3, A4, A5, A6, A7 = self.get_params(p)
         # A7 is in molecules / cm2
         # tendency of ozone volume mixing ratio per second
-        do3dt = A1 + A2*(o3 - A3) + A4*(T - A5) + A6*(o3col - A7)
+        do3dt = A1 + A2 * (o3 - A3) + A4 * (T - A5) + A6 * (o3col - A7)
 
         # transport term
         transport_ox = self.ozone_transport(o3, z, upwelling)
 
-        atmosphere['O3'] = (
-            ('time', 'plev'),
-            (o3 + (do3dt * 24 * 60**2 + transport_ox) * timestep).reshape(1, -1)
+        atmosphere["O3"] = (
+            ("time", "plev"),
+            (o3 + (do3dt * 24 * 60 ** 2 + transport_ox) * timestep).reshape(1, -1),
         )
+
 
 class Simotrostra(Cariolle):
     """Wrapper for Ed Charlesworth's simple chemistry scheme."""

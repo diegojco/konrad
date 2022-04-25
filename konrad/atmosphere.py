@@ -377,14 +377,14 @@ class Atmosphere(Component):
             # Return the single coldest point on the actual pressure grid.
             return self["plev"][self.get_cold_point_index()]
 
-    def get_thermal_tropopause_index(self):
+    def get_thermal_and_ozone_tropopause_index(self):
         """Return the model level index of the thermal tropopause.
         
         Returns:
             int: Model level index at the thermal tropopause as defined by the WMO.
         """
         # Calculates the lapse-rate in Kelvin per kilometre
-        lapse_rate = np.gradient(self["T"][0, :], self["z"][0, :] / 1000)
+        lapse_rate_K_per_km = np.gradient(self["T"][0, :], self["z"][0, :] / 1000)
         
         # Gets the indices where the lapse rate decreases at less than two Kelvin per
         # kilometre
@@ -401,23 +401,30 @@ class Atmosphere(Component):
             
             index = mask[i]
             
-            limit_test = np.where(self["z"][0, :]-self["z"][0, index] >= 2)[0][0]
-            region = lapse_rate[index:limit_test + 1]
+            limit_test = np.where(self["z"][0, :] - self["z"][0, index] >= 2)[0][0]
+            region = lapse_rate_K_per_km[index: limit_test + 1]
             
             if np.all(region >= -2):
                 thermal_tropopause = index
             i += 1
-            
-        return thermal_tropopause
 
-    def get_thermal_tropopause_plev(self):
-        """Return the thermal tropopause pressure.
-
-        Returns:
-            float: Pressure at the thermal tropopause [Pa].
-        """
+        ozone_tropopause = np.where(
+            self["z"][0, :]- self["z"][0, thermal_tropopause] > -1
+        )[0][0]
+        ozone_tropopause_sub = np.where(
+            self["z"][0, :]- self["z"][0, ozone_tropopause] > -2
+        )[0][0]
+        ozone_tropopause_super = np.where(
+            self["z"][0, :]- self["z"][0, thermal_tropopause] > 2
+        )[0][0]
         
-        return self['plev'][self.get_thermal_tropopause_index()]
+            
+        return (
+            thermal_tropopause,
+            ozone_tropopause_sub,
+            ozone_tropopause,
+            ozone_tropopause_super,
+        )
 
     def get_triple_point_index(self):
         """Return the model level index at the triple point.
