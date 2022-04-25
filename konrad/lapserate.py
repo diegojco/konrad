@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Contains classes for handling atmospheric temperature lapse rates.
 These are used by the convection sub-model to set the temperature profile in
 the troposphere.
@@ -24,6 +23,7 @@ import abc
 
 import numpy as np
 from typhon.physics import vmr2mixing_ratio, density
+from scipy.integrate import ode
 from scipy.interpolate import interp1d
 
 from konrad import constants
@@ -107,7 +107,7 @@ class MoistLapseRate(LapseRate):
 
 
 class FixedLapseRate(LapseRate):
-    """Fixed constant lapse rate through the whole atmosphere. Linear decrease
+    """Fixed constant lapse rate through the whole troposphere. Linear decrease
     in temperature with height."""
 
     def __init__(self, lapserate=0.0065):
@@ -130,3 +130,58 @@ class DryLapseRate(FixedLapseRate):
         gamma_d = g / c_p
 
         super().__init__(lapserate=gamma_d)
+
+
+class BoundaryLayer(LapseRate):
+    """Moist-adiabatic lapse rate with a dry boundary layer above the surface."""
+    def __init__(self, bl_height=950e2):
+        """Initialize a moist-adiabat with boundary layer.
+
+        Parameters:
+            bl_height (float): Height of boundary layer [Pa].
+        """
+        self.bl_height = bl_height
+
+        self._dry_lr = DryLapseRate()
+        self._moist_lr = MoistLapseRate()
+
+    def __call__(self, p, T):
+        if p > self.bl_height:
+            return self._dry_lr(p, T)
+        else:
+            return self._moist_lr(p, T)
+
+
+def get_moist_adiabat(p, p_s=None, T_s=300.0, T_min=155.0):
+    """Create a moist-adiabat from a given surface T up to the cold point.
+
+    Warning:
+        For very high surface temperatures (>320 K) the pressure grid needs a
+        high resolution, otherwise the integration becomes unstable due to the
+        large lapse-rate at low pressures.
+
+    Parameters:
+        p (ndarray): Pressure levels [Pa].
+        p_s (float): Surface pressure [Pa].
+        T_s (float): Surface temperautre [K].
+        T_min (float): Cold-point temperature (constant temperature above).
+
+    Returns:
+        ndarray: Moist-adiabativ temperature profile.
+
+    """
+    dTdp = MoistLapseRate().calc_lapse_rate
+
+    T = np.zeros_like(p)
+    dp = np.gradient(p)
+
+    r = ode(dTdp).set_integrator("lsoda", atol=1e-4)
+    r.set_initial_value(T_s, p[0] - 0.5 * dp[0] if p_s is None else p_s)
+
+    i = 0
+    while r.successful() and (r.t > p.min() and r.y[0] > T_min):
+        r.integrate(p[i])
+        T[i] = r.y[0]
+        i += 1
+
+    return T.clip(min=T_min)

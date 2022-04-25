@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """This module contains classes for an upwelling induced cooling term.
 To include an upwelling, use :py:class:`StratosphericUpwelling`, otherwise use
 :py:class:`NoUpwelling`.
@@ -61,13 +60,18 @@ def bdc_profile(norm_level):
         callable: Brewer-Dobson circulation velocity [m / day] as a function
             of pressure [Pa]
     """
-    p = np.array([100, 80, 70, 60, 50, 40, 30, 20, 10])*100  # [Pa]
-    bdc = np.array([0.28, 0.24, 0.23, 0.225, 0.225, 0.24, 0.27, 0.32, 0.42]
-                   )*meters_per_day  # [m / day]
-    f = interp1d(np.log(p/norm_level), bdc,
-                 fill_value=(0.42*meters_per_day, 0.28*meters_per_day),
-                 bounds_error=False,
-                 kind='quadratic')
+    p = np.array([100, 80, 70, 60, 50, 40, 30, 20, 10]) * 100  # [Pa]
+    bdc = (
+        np.array([0.28, 0.24, 0.23, 0.225, 0.225, 0.24, 0.27, 0.32, 0.42])
+        * meters_per_day
+    )  # [m / day]
+    f = interp1d(
+        np.log(p / norm_level),
+        bdc,
+        fill_value=(0.42 * meters_per_day, 0.28 * meters_per_day),
+        bounds_error=False,
+        kind="quadratic",
+    )
     return f
 
 
@@ -76,7 +80,7 @@ class Upwelling(Component, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def cool(self, atmosphere, convection, timestep):
-        """ Cool the atmosphere according to an upwelling.
+        """Cool the atmosphere according to an upwelling.
 
         Parameters:
             atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
@@ -87,12 +91,14 @@ class Upwelling(Component, metaclass=abc.ABCMeta):
 
 class NoUpwelling(Upwelling):
     """Do not apply a dynamical cooling."""
+
     def cool(self, *args, **kwargs):
         pass
 
 
 class StratosphericUpwelling(Upwelling):
     """Apply a dynamical cooling, based on a specified upwelling velocity."""
+
     def __init__(self, w=0.2, lowest_level=None):
         """Create a upwelling handler.
 
@@ -104,7 +110,7 @@ class StratosphericUpwelling(Upwelling):
         self._w = w * meters_per_day  # in m/day
         self._lowest_level = lowest_level
 
-    def cool(self, atmosphere, convection, timestep):
+    def cool(self, surface, atmosphere, convection, timestep):
         """Apply cooling above the convective top (level where the net
         radiative heating becomes small).
 
@@ -116,19 +122,19 @@ class StratosphericUpwelling(Upwelling):
         # Ensure that the variable is initialized even if the upwelling is not
         # applied. A proper initaliziation is needed to write netCDF output.
         self.create_variable(
-            'cooling_rates',
-            dims=('time', 'plev'),
+            "cooling_rates",
+            dims=("time", "plev"),
             data=np.zeros_like(atmosphere["plev"]).reshape(1, -1),
         )
 
-        T = atmosphere['T'][0, :]
-        z = atmosphere['z'][0, :]
+        T = atmosphere["T"][0, :]
+        z = atmosphere["z"][0, :]
         Cp = atmosphere.get_heat_capacity()
 
         if self._lowest_level is not None:
             above_level_index = self._lowest_level
         else:
-            above_level_index = convection.get('convective_top_index')[0]
+            above_level_index = convection.get("convective_top_index")[0]
             if np.isnan(above_level_index):
                 # if convection hasn't been applied and a lowest level for the
                 # upwelling has not been specified, upwelling is not applied
@@ -137,13 +143,91 @@ class StratosphericUpwelling(Upwelling):
 
         Q = cooling_rates(T, z, self._w, Cp, above_level_index)
 
-        atmosphere['T'][0, :] += Q * timestep
+        atmosphere["T"][0, :] += Q * timestep
 
-        self['cooling_rates'] = (('time', 'plev'), -Q.reshape(1, -1))
+        self["cooling_rates"] = (("time", "plev"), -Q.reshape(1, -1))
 
+class Coupled_StratosphericUpwelling(Upwelling):
+    """Linear relationship between surface warming and upwelling speed"""
+    def __init__(self, w=0.2, rate=0.03, lowest_level=None):
+        """ Creates a coupled upwelling handler.
+            
+        Parameters:
+             w (float): Upwelling velocity in mm/s.
+             rate(float): Rate at which the w changes with surface temperature. mm/s/K
+             lowest_level (int or None): The index of the lowest level to which
+                 the upwelling is applied. If none, uses the top of convection.
+                
+        """
+        self._w = w * meters_per_day
+        self._w_o = w
+        self._rate = rate
+        self._lowest_level = lowest_level
+        self._Tso = None
+        
+    def _update_upwelling(self, surface):
+        """Updates the upwelling speed.
+        
+        Parameters:
+            surface (konrad.surface.Surface): Surface model.
+        
+        Notes:
+            
+            This updating model assumes a linear relationships between warming and
+            upwelling.
+
+        """
+        new_w = self._w_o + (self._rate * (surface["temperature"][-1] - self._Tso))
+        return new_w
+    
+    def cool(self, surface, atmosphere, convection, timestep):
+        """Apply cooling above the convective top (level where the net
+        radiative heating becomes small).
+        
+        Parameters:
+            surface (konrad.surface.Surface): Surface model.
+            atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
+            convection (konrad.convection): Convection model.
+            timestep (float): Timestep width [day].
+        """
+        # Get the first surface temperature to calculate the surface temperature change
+        if self._Tso is None:
+            self._Tso = surface["temperature"][-1]
+        
+        # Calculate the new upwelling speed
+        self._w = self._update_upwelling(surface) * meters_per_day
+        
+        # Ensure that the variable is initialized even if the upwelling is not
+        # applied. A proper initaliziation is needed to write netCDF output.
+        self.create_variable(
+            "cooling_rates",
+            dims=("time", "plev"),
+            data=np.zeros_like(atmosphere["plev"]).reshape(1, -1),
+        )
+        
+        T = atmosphere["T"][0, :]
+        z = atmosphere["z"][0, :]
+        Cp = atmosphere.get_heat_capacity()
+        
+        if self._lowest_level is not None:
+            above_level_index = self._lowest_level
+        else:
+            above_level_index = convection.get("convective_top_index")[0]
+            if np.isnan(above_level_index):
+                # if convection hasn't been applied and a lowest level for the
+                # upwelling has not been specified, upwelling is not applied
+                return
+        above_level_index = int(np.round(above_level_index))
+        
+        Q = cooling_rates(T, z, self._w, Cp, above_level_index)
+        
+        atmosphere["T"][0, :] += Q * timestep
+        
+        self["cooling_rates"] = (("time", "plev"), -Q.reshape(1, -1))
 
 class SpecifiedCooling(Upwelling):
     """Include an upwelling with specified cooling"""
+
     def __init__(self, Q):
         """
         Parameters:
@@ -158,12 +242,13 @@ class SpecifiedCooling(Upwelling):
             atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
             timestep (float): Timestep width [day].
         """
-        atmosphere['T'][0, :] += self._Q * timestep
+        atmosphere["T"][0, :] += self._Q * timestep
 
 
 class CoupledUpwelling(StratosphericUpwelling):
     """Include an upwelling based on reanalysis values for the BDC strength
     and coupled to the convective top."""
+
     def __init__(self, norm_plev=None):
         """
         Parameters:
@@ -185,26 +270,27 @@ class CoupledUpwelling(StratosphericUpwelling):
             timestep (float): Timestep width [day].
         """
         if self._norm_plev is None:  # first time only and if not specified
-            above_level_index = convection.get('convective_top_index')[0]
+            above_level_index = convection.get("convective_top_index")[0]
             if np.isnan(above_level_index):
                 raise ValueError(
-                    'No convective top found and no input normalisation level '
-                    'for the coupled upwelling.')
-            self._norm_plev = atmosphere['plev'][above_level_index]
+                    "No convective top found and no input normalisation level "
+                    "for the coupled upwelling."
+                )
+            self._norm_plev = atmosphere["plev"][above_level_index]
 
         if self._f is None:  # first time only
             self._f = bdc_profile(self._norm_plev)
 
-        above_level_index = convection.get('convective_top_index')[0]
-        norm_plev = atmosphere['plev'][above_level_index]
-        self._w = self._f(np.log(atmosphere['plev'] / norm_plev))
+        above_level_index = convection.get("convective_top_index")[0]
+        norm_plev = atmosphere["plev"][above_level_index]
+        self._w = self._f(np.log(atmosphere["plev"] / norm_plev))
 
-        T = atmosphere['T'][0, :]
-        z = atmosphere['z'][0, :]
+        T = atmosphere["T"][0, :]
+        z = atmosphere["z"][0, :]
         Cp = atmosphere.get_heat_capacity()
         Q = cooling_rates(T, z, self._w, Cp, above_level_index)
 
-        atmosphere['T'][0, :] += Q * timestep
+        atmosphere["T"][0, :] += Q * timestep
 
-        self['w'] = (('time', 'plev'), self._w.reshape(1, -1))
-        self['cooling_rates'] = (('time', 'plev'), -Q.reshape(1, -1))
+        self["w"] = (("time", "plev"), self._w.reshape(1, -1))
+        self["cooling_rates"] = (("time", "plev"), -Q.reshape(1, -1))

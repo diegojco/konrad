@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class _ARTS:
-    def __init__(self, ws=None, threads=None, nstreams=4, verbosity=0):
+    def __init__(self, ws=None, threads=None, nstreams=4, scale_vmr=True, verbosity=0):
         """Initialize a wrapper for an ARTS workspace.
 
         Parameters:
@@ -26,11 +26,14 @@ class _ARTS:
                 Default is all available threads.
             nstreams (int): Number of viewing angles to base the radiative
                 flux calculation on.
+            scale_vmr (bool): Control whether dry volume mixing ratios are
+                scaled with the water-vapor concentration (default is `False.`)
             verbosity (int): Control the ARTS verbosity from 0 (quiet) to 2.
         """
         from pyarts.workspace import Workspace, arts_agenda
 
         self.nstreams = nstreams
+        self.scale_vmr = scale_vmr
 
         if ws is None:
             self.ws = Workspace(verbosity=verbosity)
@@ -97,8 +100,7 @@ class _ARTS:
 
         # Read lookup table
         abs_lookup = os.getenv(
-            "KONRAD_LOOKUP_TABLE",
-            join(dirname(__file__), "data/abs_lookup.xml")
+            "KONRAD_LOOKUP_TABLE", join(dirname(__file__), "data/abs_lookup.xml")
         )
 
         if not isfile(abs_lookup):
@@ -125,7 +127,7 @@ class _ARTS:
         if threads is not None:
             self.ws.SetNumberOfThreads(threads)
 
-    def calc_lookup_table(self, filename=None):
+    def calc_lookup_table(self, filename=None, fnum=2 ** 15, wavenumber=None):
         """Calculate an absorption lookup table.
 
         The lookup table is constructed to cover surface temperatures
@@ -141,9 +143,13 @@ class _ARTS:
         Parameters:
             filename (str): (Optional) path to an ARTS XML file
                 to store the lookup table.
+            fnum (int): Number of frequencies in frequency grid.
+                Ignored if `wavenumber` is set.
+            wavenumber (ndarray): Wavenumber grid [m-1].
         """
         # Create a frequency grid
-        wavenumber = np.linspace(10e2, 3_250e2, 2**15)  # 1 to 3000cm^-1
+        if wavenumber is None:
+            wavenumber = np.linspace(10e2, 3_250e2, fnum)
         self.ws.f_grid = ty.physics.wavenumber2frequency(wavenumber)
 
         # Read line catagloge and create absorption lines.
@@ -175,7 +181,7 @@ class _ARTS:
         atmosphere["O2"][:] = 0.2095
         atmosphere["CO2"][:] = 1.5 * 348e-6
 
-        h2o = 0.03 * (p_grid / 1000e2)**0.2
+        h2o = 0.01 * (p_grid / 1000e2) ** 0.2
         atmosphere["H2O"][:] = h2o[:-1]
 
         # Convert the konrad atmosphere into an ARTS atm_fields_compact.
@@ -192,18 +198,21 @@ class _ARTS:
         # Setup the lookup table calculation
         self.ws.AtmFieldsAndParticleBulkPropFieldFromCompact()
         self.ws.vmr_field.value = self.ws.vmr_field.value.clip(min=0.0)
-        self.ws.atmfields_checkedCalc(bad_partition_functions_ok=1)
+        self.ws.atmfields_checkedCalc()
         self.ws.abs_lookupSetup(p_step=1.0)  # Do not refine p_grid
-        self.ws.abs_t_pert = np.arange(-160, 41, 20)
+        self.ws.abs_t_pert = np.arange(-160, 61, 20)
 
-        nls_idx = [i for i, tag in enumerate(self.ws.abs_species.value)
-                   if "H2O" in tag[0]]
+        nls_idx = [
+            i for i, tag in enumerate(self.ws.abs_species.value) if "H2O" in tag[0]
+        ]
         self.ws.abs_speciesSet(
-                abs_species=self.ws.abs_nls,
-                species=[", ".join(self.ws.abs_species.value[nls_idx[0]])],
+            abs_species=self.ws.abs_nls,
+            species=[", ".join(self.ws.abs_species.value[nls_idx[0]])],
         )
 
-        self.ws.abs_nls_pert = np.array([10**n for n in range(-7, 2)])
+        self.ws.abs_nls_pert = np.array(
+            [10 ** x for x in [-9, -7, -5, -3, -1, 0, 0.5, 1, 1.5, 2]]
+        )
 
         # Run checks
         self.ws.abs_xsec_agenda_checkedCalc()
@@ -215,22 +224,34 @@ class _ARTS:
         if filename is not None:
             self.ws.WriteXML("binary", self.ws.abs_lookup, filename)
 
-    def calc_spectral_irradiance_field(self, atmosphere, t_surface):
-        """Calculate the spectral irradiance field."""
+    def set_atmospheric_state(self, atmosphere, t_surface):
+        """Set and check the atmospheric fields."""
+        import pyarts
+
         atm_fields_compact = atmosphere.to_atm_fields_compact()
 
-        # Scale dry air VMRs with water content
-        vmr_h2o = atm_fields_compact.get("abs_species-H2O")
-        total_vmr = vmr_h2o[0]
+        # Scale dry-air VMRs with H2O and CO2 content.
+        if self.scale_vmr:
+            variable_vmrs = (
+                atm_fields_compact.get("abs_species-H2O")[0]
+                + atm_fields_compact.get("abs_species-CO2")[0]
+            )
+        else:
+            t3_shape = atm_fields_compact.get("abs_species-H2O")[0].shape
+            variable_vmrs = np.zeros(t3_shape)
+
         for species in atm_fields_compact.grids[0]:
-            if species.startswith("abs_species-") and "H2O" not in species:
-                atm_fields_compact.scale(species, 1 - vmr_h2o)
-                total_vmr += atm_fields_compact.get(species)[0]
+            if (
+                species.startswith("abs_species-")
+                and "H2O" not in species
+                and "CO2" not in species
+            ):
+                atm_fields_compact.scale(species, 1 - variable_vmrs)
 
         # Compute the N2 VMR as a residual of the full atmosphere composition.
-        n2 = ty.arts.types.GriddedField3(
+        n2 = pyarts.types.GriddedField3(
             grids=atm_fields_compact.grids[1:],
-            data=1 - total_vmr,
+            data=0.7808 * (1 - variable_vmrs),
         )
 
         self.ws.atm_fields_compact = atm_fields_compact
@@ -249,23 +270,26 @@ class _ARTS:
         self.ws.z_surface = np.array([[0.0]])
         self.ws.z_field.value[0, 0, 0] = 0.0
 
-        # Perform RT calculations
-        self.ws.atmfields_checkedCalc(bad_partition_functions_ok=1)
+        # Perform configuration and atmosphere checks
+        self.ws.atmfields_checkedCalc()
         self.ws.propmat_clearsky_agenda_checkedCalc()
         self.ws.atmgeom_checkedCalc()
         self.ws.cloudbox_checkedCalc()
 
+    def calc_spectral_irradiance_field(self, atmosphere, t_surface):
+        """Calculate the spectral irradiance field."""
+        self.set_atmospheric_state(atmosphere, t_surface)
+
         # get the zenith angle grid and the integrations weights
         self.ws.AngularGridsSetFluxCalc(
-            N_za_grid=self.nstreams,
-            N_aa_grid=1,
-            za_grid_type="double_gauss"
+            N_za_grid=self.nstreams, N_aa_grid=1, za_grid_type="double_gauss"
         )
 
         # calculate intensity field
         self.ws.Tensor3Create("trans_field")
         self.ws.spectral_radiance_fieldClearskyPlaneParallel(
-            trans_field=self.ws.trans_field, use_parallel_iy=1
+            trans_field=self.ws.trans_field,
+            use_parallel_za=0,
         )
         self.ws.spectral_irradiance_fieldFromSpectralRadianceField()
 
@@ -276,20 +300,32 @@ class _ARTS:
             self.ws.trans_field.value[:, 1:, 0].copy().prod(axis=1),
         )
 
-    def calc_radiative_fluxes(self, atmosphere, surface):
-        """Calculate radiative fluxes.
+    def calc_optical_thickness(self, atmosphere, t_surface):
+        """Calculate the spectral irradiance field."""
+        self.set_atmospheric_state(atmosphere, t_surface)
+
+        self.ws.propmat_clearsky_fieldCalc()
+
+        tau = np.trapz(
+            y=self.ws.propmat_clearsky_field.value[:, :, 0, 0, :, 0, 0],
+            x=self.ws.z_field.value[:, 0, 0],
+            axis=-1,
+        )
+
+        return self.ws.f_grid.value.copy(), tau
+
+    @staticmethod
+    def integrate_spectral_irradiance(frequency, irradiance):
+        """Integrate the spectral irradiance field over the frequency.
 
         Parameters:
-            atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
-            surface (konrad.surface.Surface): Surface model.
+            frequency (ndarray): Frequency [Hz].
+            irradiance (ndarray): Spectral irradiance [W m^-2 / Hz].
 
         Returns:
             ndarray, ndarray: Downward flux, upward, flux [W m^-2]
         """
-        f, plev, irradiance_field, _ = self.calc_spectral_irradiance_field(
-            atmosphere=atmosphere, t_surface=surface["temperature"][0]
-        )
-        F = np.trapz(irradiance_field, f, axis=0)[:, 0, 0, :]
+        F = np.trapz(irradiance, frequency, axis=0)[:, 0, 0, :]
 
         # Fluxes
         lw_down = -F[:, 0]
@@ -314,10 +350,12 @@ class _ARTS:
 
 
 class ARTS(RRTMG):
-    def __init__(self, *args, arts_kwargs={}, **kwargs):
+    def __init__(self, store_spectral_olr=False, *args, arts_kwargs={}, **kwargs):
         """Radiation class to provide line-by-line longwave fluxes.
 
         Parameters:
+            store_spectral_olr (bool): Store spectral OLR in netCDF file.
+                This will significantly increase the output size.
             args: Positional arguments are used to initialize
                 `konrad.radiation.RRTMG`.
             arts_kwargs (dict): Keyword arguments that are used to initialize
@@ -327,6 +365,7 @@ class ARTS(RRTMG):
         """
         super().__init__(*args, **kwargs)
 
+        self.store_spectral_olr = store_spectral_olr
         self._arts = _ARTS(**arts_kwargs)
 
     def calc_radiation(self, atmosphere, surface, cloud):
@@ -345,37 +384,48 @@ class ARTS(RRTMG):
         sw_fluxes = sw_dT_fluxes[1]
 
         # Perform ARTS simulation
-        Fd, Fu = self._arts.calc_radiative_fluxes(atmosphere, surface)
+        f, _, irradiance_field, _ = self._arts.calc_spectral_irradiance_field(
+            atmosphere=atmosphere, t_surface=surface["temperature"][0]
+        )
+        Fd, Fu = self._arts.integrate_spectral_irradiance(f, irradiance_field)
 
         # Interpolate RT results on fine original grid
         def _reshape(x, trim=-1):
             return x[:trim].reshape(1, -1)
 
-        self['lw_flxu'] = _reshape(Fu, trim=None)
-        self['lw_flxd'] = _reshape(Fd, trim=None)
-        self['lw_flxu_clr'] = _reshape(Fu, trim=None)
-        self['lw_flxd_clr'] = _reshape(Fd, trim=None)
-        self['sw_flxu'] = _reshape(
-            sw_fluxes['upwelling_shortwave_flux_in_air'].data)
-        self['sw_flxd'] = _reshape(
-            sw_fluxes['downwelling_shortwave_flux_in_air'].data)
-        self['sw_flxu_clr'] = _reshape(
-            sw_fluxes['upwelling_shortwave_flux_in_air_assuming_clear_sky'].data)
-        self['sw_flxd_clr'] = _reshape(
-            sw_fluxes['downwelling_shortwave_flux_in_air_assuming_clear_sky'].data)
+        self["lw_flxu"] = _reshape(Fu, trim=None)
+        self["lw_flxd"] = _reshape(Fd, trim=None)
+        self["lw_flxu_clr"] = _reshape(Fu, trim=None)
+        self["lw_flxd_clr"] = _reshape(Fd, trim=None)
+        self["sw_flxu"] = _reshape(sw_fluxes["upwelling_shortwave_flux_in_air"].data)
+        self["sw_flxd"] = _reshape(sw_fluxes["downwelling_shortwave_flux_in_air"].data)
+        self["sw_flxu_clr"] = _reshape(
+            sw_fluxes["upwelling_shortwave_flux_in_air_assuming_clear_sky"].data
+        )
+        self["sw_flxd_clr"] = _reshape(
+            sw_fluxes["downwelling_shortwave_flux_in_air_assuming_clear_sky"].data
+        )
 
-        self['lw_htngrt'] = np.zeros((1, atmosphere["plev"].size))
-        self['lw_htngrt_clr'] = np.zeros((1, atmosphere["plev"].size))
-        self['sw_htngrt'] = np.zeros((1, atmosphere["plev"].size))
-        self['sw_htngrt_clr'] = np.zeros((1, atmosphere["plev"].size))
+        self["lw_htngrt"] = np.zeros((1, atmosphere["plev"].size))
+        self["lw_htngrt_clr"] = np.zeros((1, atmosphere["plev"].size))
+        self["sw_htngrt"] = np.zeros((1, atmosphere["plev"].size))
+        self["sw_htngrt_clr"] = np.zeros((1, atmosphere["plev"].size))
 
         self.coords = {
-            'time': np.array([0]),
-            'phlev': atmosphere['phlev'],
-            'plev': atmosphere['plev'],
+            "time": np.array([0]),
+            "phlev": atmosphere["phlev"],
+            "plev": atmosphere["plev"],
         }
 
-    def update_heatingrates(self, atmosphere, surface, cloud):
+        if self.store_spectral_olr:
+            self.coords.update({"frequency": f})
+            self.create_variable(
+                name="outgoing_longwave_radiation",
+                data=irradiance_field[:, -1, 0, 0, 1].reshape(1, -1),
+                dims=("time", "frequency"),
+            )
+
+    def update_heatingrates(self, atmosphere, surface, cloud=None):
         """Returns `xr.Dataset` containing radiative transfer results."""
         self.calc_radiation(atmosphere, surface, cloud)
 
@@ -384,24 +434,24 @@ class ARTS(RRTMG):
             f = PchipInterpolator(np.log(pressure[::-1]), Q[::-1])
             return f(np.log(atmosphere["plev"]))
 
-        self['sw_htngrt'][-1] = fluxes(
-            net_fluxes=self['sw_flxu'][-1] - self['sw_flxd'][-1],
-            pressure=atmosphere['phlev'],
+        self["sw_htngrt"][-1] = fluxes(
+            net_fluxes=self["sw_flxu"][-1] - self["sw_flxd"][-1],
+            pressure=atmosphere["phlev"],
         )
 
-        self['sw_htngrt_clr'][-1] = fluxes(
-            net_fluxes=self['sw_flxu_clr'][-1] - self['sw_flxd_clr'][-1],
-            pressure=atmosphere['phlev'],
+        self["sw_htngrt_clr"][-1] = fluxes(
+            net_fluxes=self["sw_flxu_clr"][-1] - self["sw_flxd_clr"][-1],
+            pressure=atmosphere["phlev"],
         )
 
-        self['lw_htngrt'][-1] = fluxes(
-            net_fluxes=self['lw_flxu'][-1] - self['lw_flxd'][-1],
-            pressure=atmosphere['phlev'],
+        self["lw_htngrt"][-1] = fluxes(
+            net_fluxes=self["lw_flxu"][-1] - self["lw_flxd"][-1],
+            pressure=atmosphere["phlev"],
         )
 
-        self['lw_htngrt_clr'][-1] = fluxes(
-            net_fluxes=self['lw_flxu_clr'][-1] - self['lw_flxd_clr'][-1],
-            pressure=atmosphere['phlev'],
+        self["lw_htngrt_clr"][-1] = fluxes(
+            net_fluxes=self["lw_flxu_clr"][-1] - self["lw_flxd_clr"][-1],
+            pressure=atmosphere["phlev"],
         )
 
         self.derive_diagnostics()
