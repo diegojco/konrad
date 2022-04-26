@@ -22,18 +22,14 @@ Relative humidity
 
    RelativeHumidityModel
    CacheFromAtmosphere
-   HeightConstant
-   VerticallyUniform
-   ConstantFreezingLevel
-   FixedUTH
-   CoupledUTH
-   CshapeConstant
-   CshapeDecrease
-   Manabe67
    Cess76
-   Romps14
-   PolynomialCshapedRH
+   Manabe67
    PerturbProfile
+   PolynomialCshapedRH
+   ProfileFromData
+   Romps14
+   VerticallyUniform
+   VshapeT
 
 Stratospheric coupling
 ----------------------
@@ -45,6 +41,4 @@ Stratospheric coupling
 
    StratosphereCoupler
    ColdPointCoupling
-   NonIncreasing
    FixedStratosphericVMR
-   MinimumStratosphericVMR

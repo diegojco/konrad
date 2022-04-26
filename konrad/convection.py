@@ -247,8 +247,9 @@ class HardAdjustment(Convection):
         while diff_pos >= near_zero and np.abs(diff_neg) >= near_zero:
             # Use a surface temperature between our upper and lower bounds and
             # closer to the bound associated with a smaller energy change.
-            surfaceT = (surfaceTneg + (surfaceTpos - surfaceTneg)
-                        * (-diff_neg) / (-diff_neg + diff_pos))
+            surfaceT = surfaceTneg + (surfaceTpos - surfaceTneg) * (-diff_neg) / (
+                -diff_neg + diff_pos
+            )
             # Calculate temperature profile and energy change associated with
             # this surface temperature.
             T_con, diff = self.create_and_check_profile(
@@ -273,7 +274,9 @@ class HardAdjustment(Convection):
             # to avoid getting stuck in a loop if something weird is going on
             counter += 1
             if counter == 10000:
-                raise ValueError("No energy conserving convective profile can be found")
+                raise ValueError(
+                    "No energy conserving convective profile can be found"
+                )
 
         return T_con, surfaceT
 

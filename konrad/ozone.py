@@ -156,7 +156,7 @@ class OzoneRedistributed(Ozone):
 
     def __init__(self):
         self._f = None
-        
+
     def redistribute_ozone(self, atmosphere):
         """Redistribute ozone according to Hardiman"""
         from typhon.physics import density as rhopT

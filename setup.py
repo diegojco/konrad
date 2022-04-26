@@ -25,20 +25,20 @@ setup(
         # See https://pypi.python.org/pypi?%3Aaction=list_classifiers
         'Intended Audience :: Science/Research',
         'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
     ],
     python_requires='>=3.6',
     include_package_data=True,
     install_requires=[
         'matplotlib>=2.0.0',
         'netcdf4>=1.2.7',
-        'numpy>=1.16.0',
+        'numpy>=1.20.0,<1.22.0',
         'scipy>=0.19.0',
         'typhon>=0.7.0',
         'xarray>=0.9.1',
-        'climt @ https://api.github.com/repos/atmtools/climt/tarball/allow-latest-numpy',
+        'climt>=0.16.25',
         'sympl>=0.4.0',
     ],
     extras_require={
@@ -46,6 +46,7 @@ setup(
             'pyarts',
         ],
         'docs': [
+            'jupyter-book',
             'sphinx',
             'sphinx_rtd_theme',
         ],
