@@ -314,6 +314,59 @@ class Cariolle(Ozone):
             (o3 + (do3dt * 24 * 60 ** 2 + transport_ox) * timestep).reshape(1, -1),
         )
 
+class Cariolle_normalised(Cariolle):
+    """Implementation of the Cariolle scheme with redistribution of the coefficients
+    wrt the cold-point or thermal-tropopause pressure.
+    """
+    def __init__(self, w=0, norm_level=None,
+                 is_coupled_upwelling=False, profile_coupling="cold_point"):
+        """
+        Parameters:
+            p (ndarray): pressure levels [Pa]
+            T (ndarray): temperature values [K]
+        Returns:
+            ndarray: density of molecules [number of molecules / m3]
+        """
+        return (constants.avogadro * p) / (constants.molar_gas_constant_dry_air * T)
+
+    def overhead_molecules(self, gas, p, z, T):
+        """
+        Parameters:
+            gas (ndarray): gas concentration [ppv] corresponding to levels p
+            p (ndarray): pressure levels [Pa]
+            z (ndarray): height values [m]
+            T (ndarray): temperature values [K]
+        Returns:
+            ndarray: number of molecules per m2 in overhead column
+        """
+        # molecules / m2 of air in each layer
+        molecules_air = self.density_of_molecules(p, T) * np.gradient(z)
+        # overhead column in molecules / m2
+        col = np.flipud(np.cumsum(np.flipud(gas * molecules_air)))
+
+        return col
+
+    def __call__(self, atmosphere, timestep, upwelling, **kwargs):
+        T = atmosphere["T"][0, :]
+        p = atmosphere["plev"]  # [Pa]
+        o3 = atmosphere["O3"][0, :]  # moles of ozone / moles of air
+        z = atmosphere["z"][0, :]  # m
+
+        o3col = self.overhead_molecules(o3, p, z, T) * 10 ** -4  # in molecules / cm2
+
+        A1, A2, A3, A4, A5, A6, A7 = self.get_params(p)
+        # A7 is in molecules / cm2
+        # tendency of ozone volume mixing ratio per second
+        do3dt = A1 + A2 * (o3 - A3) + A4 * (T - A5) + A6 * (o3col - A7)
+
+        # transport term
+        transport_ox = self.ozone_transport(o3, z, upwelling)
+
+        atmosphere["O3"] = (
+            ("time", "plev"),
+            (o3 + (do3dt * 24 * 60 ** 2 + transport_ox) * timestep).reshape(1, -1),
+        )
+
 
 class Simotrostra(Cariolle):
     """Wrapper for Ed Charlesworth's simple chemistry scheme."""

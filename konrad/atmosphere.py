@@ -192,7 +192,7 @@ class Atmosphere(Component):
         ]
 
         # Create a GriddedField4.
-        atmfield = pyarts.types.GriddedField4()
+        atmfield = pyarts.arts.GriddedField4()
 
         # Set grids and their names.
         atmfield.gridnames = ["Species", "Pressure", "Longitude", "Latitude"]
@@ -212,10 +212,10 @@ class Atmosphere(Component):
                 f(np.log(self["phlev"])).reshape(1, self["phlev"].size, 1, 1)
             )
         atmfield.data = np.vstack(profiles)
-        atmfield.dataname = "Data"
+        atmfield.name = "Data"
 
         # Perform a consistency check of the passed grids and data tensor.
-        atmfield.check_dimension()
+        atmfield.checksize_strict()
 
         return atmfield
 
@@ -379,17 +379,16 @@ class Atmosphere(Component):
 
     def get_thermal_and_ozone_tropopause_index(self):
         """Return the model level index of the thermal tropopause.
-
         Returns:
             int: Model level index at the thermal tropopause as defined by the WMO.
         """
         # Calculates the lapse-rate in Kelvin per kilometre
         lapse_rate_K_per_km = np.gradient(self["T"][0, :], self["z"][0, :] / 1000)
-
+        
         # Gets the indices where the lapse rate decreases at less than two Kelvin per
         # kilometre
         mask = np.where(lapse_rate > -2)[0]
-
+        
         # 1. Takes lowermost index in our mask
         # 2. Gets all the points that are two kilometres above this index
         # 3. If the lapse rate decreases at less than two Kelvin per kilometre in this
@@ -398,12 +397,12 @@ class Atmosphere(Component):
         thermal_tropopause = False
         i=0
         while not thermal_tropopause:
-
+            
             index = mask[i]
-
+            
             limit_test = np.where(self["z"][0, :] - self["z"][0, index] >= 2)[0][0]
             region = lapse_rate_K_per_km[index: limit_test + 1]
-
+            
             if np.all(region >= -2):
                 thermal_tropopause = index
             i += 1
@@ -417,8 +416,8 @@ class Atmosphere(Component):
         ozone_tropopause_super = np.where(
             self["z"][0, :]- self["z"][0, thermal_tropopause] > 2
         )[0][0]
-
-
+        
+            
         return (
             thermal_tropopause,
             ozone_tropopause_sub,

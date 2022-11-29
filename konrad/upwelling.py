@@ -79,9 +79,8 @@ class Upwelling(Component, metaclass=abc.ABCMeta):
     """Base class to define abstract methods for all upwelling handlers."""
 
     @abc.abstractmethod
-    def cool(self, atmosphere, convection, timestep):
-        """Cool the atmosphere according to an upwelling.
-
+    def cool(self, surface, atmosphere, convection, timestep):
+        """ Cool the atmosphere according to an upwelling.
         Parameters:
             atmosphere (konrad.atmosphere.Atmosphere): Atmosphere model.
             convection (konrad.convection): Convection model.
